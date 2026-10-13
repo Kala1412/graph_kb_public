@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  learning-minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: learning-minio
+    environment:
+      MINIO_ACCESS_KEY: learningadmin
+      MINIO_SECRET_KEY: learningadmin
+    volumes:
+      - ./minio_data:/minio_data
+
+      - ./minio_config:/root/.minio
+    command: minio server /minio_data --address 0.0.0.0:9000 --console-address 0.0.0.0:9001
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    restart: unless-stopped
+    networks:
+      - learning-network
+
+  learning-neo4j:
+    image: neo4j:5.13.0
+    container_name: learning-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/learningpass123
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: 'true'
+      NEO4J_apoc_import_file_enabled: 'true'
+      NEO4J_apoc_import_file_use__neo4j__config: 'true'
+    volumes:
+      - ./neo4j_data:/data
+      - ./neo4j_logs:/logs
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+
+  learning-etcd:
+    container_name: learning-milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: '1000'
+      ETCD_QUOTA_BACKEND_BYTES: '4294967296'
+      ETCD_SNAPSHOT_COUNT: '50000'
+    volumes:
+      - ./milvus_data/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+  learning-milvus:
+    container_name: learning-milvus
+    image: milvusdb/milvus:v2.5.6
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: learning-milvus-etcd:2379
+      MINIO_ADDRESS: learning-minio:9000
+      MINIO_ACCESS_KEY_ID: learningadmin
+      MINIO_SECRET_ACCESS_KEY: learningadmin
+    volumes:
+      - ./milvus_data/milvus:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - learning-etcd
+      - learning-minio
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+  learning-attu:
+      image: zilliz/attu:latest
+      container_name: learning-attu
+      ports:
+        - "9100:3000"
+      depends_on:
+        - learning-milvus
+      networks:
+        - learning-network
+
+networks:
+  learning-network:
+    driver: bridge
